@@ -1,0 +1,10 @@
+%YAML 1.1
+--- 
+user: username 
+category: category folder name
+client_id: 1234
+client_secret: 3a218a5v68e8v651a32a75v9862a32e1
+output_path: /home/user/downloads/da/
+log level: warning
+...
+
