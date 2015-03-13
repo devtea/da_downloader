@@ -2,8 +2,6 @@
 logger.py
 consolidated logging module
 '''
-from __future__ import division, absolute_import, print_function, unicode_literals
-
 import logging
 import traceback
 import sys
@@ -12,8 +10,8 @@ log = logging.getLogger('logger')
 
 logging.basicConfig(
     format='%(asctime)s %(levelname)s [%(module)s]: %(message)s',
-    #datefmt='%Y-%m-%d %H:%M:%S',
-    #TODO don't hardcode this
+    # datefmt='%Y-%m-%d %H:%M:%S',
+    # TODO don't hardcode this
     filename='out.log',
     level=logging.WARNING
 )
