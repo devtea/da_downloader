@@ -3,6 +3,7 @@ import requests
 import time
 import os
 import sys
+import re
 from html.parser import HTMLParser
 
 import config
@@ -10,6 +11,7 @@ import logger
 
 _CONFIGFILE = 'config.yaml'
 _WAIT = 0.25  # global rait limiting value, don't set to 0
+_EXT = re.compile('^http.*/download/[0-9]+/[^\.]+(\.[a-zA-Z]{2,4})\?token=.*$')
 
 log = logger.getLogger()
 log.info('Initializing project')
@@ -45,7 +47,9 @@ class DAParser(ImageParser):
 def download_image(path, url, cookies=None, referrer=None):
     '''Wrapper around requests to attempt downloading a file at a specified URL'''
     try:
+        log.debug("Beginning download.")
         downloaded_image = requests.get(url, cookies=cookies, headers={'referrer': referrer}, stream=True)
+        log.debug("Finished download.")
         if downloaded_image.ok:
             with open(path, 'wb') as f:
                 for block in downloaded_image.iter_content(1024):
@@ -69,7 +73,6 @@ def da_api(conf, method, endpoint, payload):
             time.sleep(conf['wait'])
             if method == 'get':
                 request = requests.get(endpoint, params=payload)
-                return request
             elif method == 'post':
                 request = requests.post(endpoint, data=payload)
             if request.status_code == 200:
@@ -205,25 +208,39 @@ def main(args):
     deviation_count = len(deviations)
     log.info('Got %i deviations to fetch.', deviation_count)
 
-    i = 0  # Setup for completion percentage
+    downloaded = os.listdir(conf['output_path'])
+
+    i = -1  # Setup for completion percentage
     for deviation in deviations:
         try:
+            i += 1
+            log.info('Working on image %i of %i - %s%s complete.' % (i, deviation_count, str((i/deviation_count)*100)[:4], r'%'))
+
             url = deviation['url']
             log.debug("")
             log.debug("Working with deviation %s", url)
 
+            if deviation['is_deleted']:
+                log.info("Deviation is deleted, skipping.")
+                continue
+            if deviation['is_mature']:
+                log.debug("Deviation is marked as mature.")
+
             # TODO Need to check type returned when downloading actual image.
             ext = os.path.splitext(deviation['content']['src'])[-1]
-
             # Black magic to pull trailing unique identifier, or just filename
             # sans extension or path
             unq = os.path.splitext(os.path.split(deviation['content']['src'])[-1])[0].split('-')[-1]
-
+            # Generate file name
             filename = '%s_%s-%s%s' % (deviation['author']['username'], deviation['title'], unq, ext)
             # Sanitize path of unsafe characters
             path = ''.join([c for c in filename if c.isalpha() or c.isdigit() or c in '-_.() ']).strip()
-            path = os.path.join(conf['output_path'], filename)
-
+            log.debug("Looking for file %s", path)
+            if path in downloaded:
+                log.info('Deviation exists in output path, skipping.')
+                continue
+            # Generate full path
+            path = os.path.join(conf['output_path'], path)
             log.debug("Output path will be: %s", path)
 
             unsuccessful = True
@@ -238,6 +255,17 @@ def main(args):
 
                 if img:
                     log.debug("Found image url: %s", img)
+
+                    # get real extension here and rebuild file name
+                    ext = _EXT.findall(img)[0]
+                    filename = '%s_%s-%s%s' % (deviation['author']['username'], deviation['title'], unq, ext)
+                    path = ''.join([c for c in filename if c.isalpha() or c.isdigit() or c in '-_.() ']).strip()
+                    log.debug("Looking for full file %s", path)
+                    if path in downloaded:
+                        log.info('Deviation exists in output path, skipping.')
+                        continue
+                    path = os.path.join(conf['output_path'], path)
+
                     if download_image(path=path, url=img, cookies=d_page.cookies, referrer=url):
                         unsuccessful = False
                     unsuccessful = False
@@ -253,9 +281,6 @@ def main(args):
                 download_image(path=path, url=url)
 
             time.sleep(1)  # Be nice to Deviant Art :)
-            i += 1
-            log.info('Downloaded %i of %i - %s%s complete.' % (
-                i, deviation_count, str((i/deviation_count)*100)[:4], r'%'))
         except:
             log.error("Unhandled exception when downloading deviations.", exc_info=True)
     log.info('Finished')
