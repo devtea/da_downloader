@@ -7,8 +7,9 @@ This project is a simple script designed to download full resolution images from
 Dependencies
 ------------
 
-Python 3
-[requests](http://docs.python-requests.org/en/latest/)
+-Python 3
+-[requests](http://docs.python-requests.org/en/latest/)
+-[pyyaml](http://pyyaml.org/)
 
 
 Installation
