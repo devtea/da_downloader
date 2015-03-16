@@ -164,6 +164,97 @@ def api_paged(conf, method, endpoint, payload, limit=None):
     return items
 
 
+def sanitize_path(path):
+    return ''.join([c for c in path if c.isalpha() or c.isdigit() or c in '-_.() ']).strip()
+
+
+def download_folder(conf, folder_id, folder_path):
+    os.makedirs(folder_path, exist_ok=True)  # Yay python 3
+    deviations = api_paged(
+        conf,
+        'get',
+        'https://www.deviantart.com/api/v1/oauth2/collections/%s' % folder_id,
+        {'username': conf['user'], 'mature_content': 'true', 'access_token': conf['access_token']},
+        24
+    )
+    deviation_count = len(deviations)
+    log.info('Got %i deviations to fetch for folder %s.', deviation_count, folder_id)
+
+    downloaded = os.listdir(folder_path)
+
+    i = -1  # Setup for completion percentage
+    for deviation in deviations:
+        try:
+            i += 1
+            log.info('Working on image %i of %i - %s%s complete.' % (i, deviation_count, str((i/deviation_count)*100)[:4], r'%'))
+
+            url = deviation['url']
+            log.debug("")
+            log.debug("Working with deviation %s", url)
+
+            if deviation['is_deleted']:
+                log.info("Deviation is deleted, skipping.")
+                continue
+            if deviation['is_mature']:
+                log.debug("Deviation is marked as mature.")
+
+            ext = os.path.splitext(deviation['content']['src'])[-1]
+            # Black magic to pull trailing unique identifier, or just filename
+            # sans extension or path
+            unq = os.path.splitext(os.path.split(deviation['content']['src'])[-1])[0].split('-')[-1]
+            # Generate file name
+            filename = '%s_%s-%s%s' % (deviation['author']['username'], deviation['title'], unq, ext)
+            path = sanitize_path(filename)
+            log.debug("Looking for file %s", path)
+            if path in downloaded:
+                log.info('Deviation exists in output path, skipping.')
+                continue
+            # Generate full path
+            path = os.path.join(folder_path, path)
+            log.debug("Output path will be: %s", path)
+
+            unsuccessful = True
+            if deviation['is_downloadable']:
+                log.debug("Deviation is flagged as downloadable")
+                log.debug("Scraping %s for full image.", url)
+                parser = DAParser(convert_charrefs=True)
+                d_page = requests.get(url)
+                parser.feed(d_page.text)
+                img = parser.get_img()
+                del parser
+
+                if img:
+                    log.debug("Found image url: %s", img)
+
+                    # get real extension here and rebuild file name
+                    ext = _EXT.findall(img)[0]
+                    filename = '%s_%s-%s%s' % (deviation['author']['username'], deviation['title'], unq, ext)
+                    path = ''.join([c for c in filename if c.isalpha() or c.isdigit() or c in '-_.() ']).strip()
+                    log.debug("Looking for full file %s", path)
+                    if path in downloaded:
+                        log.info('Deviation exists in output path, skipping.')
+                        continue
+                    path = os.path.join(folder_path, path)
+
+                    if download_image(path=path, url=img, cookies=d_page.cookies, referrer=url):
+                        unsuccessful = False
+                    unsuccessful = False
+                else:
+                    log.warning("No image found when scraping page %s", url)
+
+            if unsuccessful:
+                # Get provided image
+                # TODO Handle images that you must be logged in to see.
+                log.debug('Falling back to content from API')
+                url = deviation['content']['src']
+                log.debug("Using image url: %s", url)
+                download_image(path=path, url=url)
+
+            time.sleep(1)  # Be nice to Deviant Art :)
+        except:
+            log.error("Unhandled exception when downloading deviations.", exc_info=True)
+
+
 def main(args):
     conf = config.getConfig(_CONFIGFILE)
     if not conf:
@@ -190,99 +281,27 @@ def main(args):
     )
     log.debug('Found %i collections for user %s.', len(collections), conf['user'])
 
-    folder_id = None
-    try:
-        folder_id = [f['folderid'] for f in collections if f['name'].lower() == conf['category'].lower()][0]
-    except IndexError:
-        log.critical("Collection %s Not found for user %s", conf['category'], conf['user'])
-        sys.exit(1)
-    log.debug('Found folder id %s for folder %s for user %s', folder_id, conf['category'], conf['user'])
+    folders = []
+    folder = None
 
-    deviations = api_paged(
-        conf,
-        'get',
-        'https://www.deviantart.com/api/v1/oauth2/collections/%s' % folder_id,
-        {'username': conf['user'], 'mature_content': 'true', 'access_token': conf['access_token']},
-        24
-    )
-    deviation_count = len(deviations)
-    log.info('Got %i deviations to fetch.', deviation_count)
-
-    downloaded = os.listdir(conf['output_path'])
-
-    i = -1  # Setup for completion percentage
-    for deviation in deviations:
+    # If collection is specified, use it. Else use all.
+    if 'collection' in conf and conf['collection']:
         try:
-            i += 1
-            log.info('Working on image %i of %i - %s%s complete.' % (i, deviation_count, str((i/deviation_count)*100)[:4], r'%'))
+            folder = [(f['folderid'], f['name']) for f in collections if f['name'].lower() == conf['collection'].lower()][0]
+        except IndexError:
+            log.critical("Collection %s Not found for user %s", conf['collection'], conf['user'])
+            sys.exit(1)
+        log.debug('Found folder id %s for folder %s for user %s', folder, conf['collection'], conf['user'])
+        folders.append(folder)
+    else:
+        folders.extend([(f['folderid'], f['name']) for f in collections])
 
-            url = deviation['url']
-            log.debug("")
-            log.debug("Working with deviation %s", url)
+    if folders:
+        for id, name in folders:  # Folders is a list of tuples
+            path = os.path.join(conf['output_path'], sanitize_path(name))  # Use folder name to create subfolder
+            log.debug("Downloading %s to %s", name, path)
+            download_folder(conf, id, path)
 
-            if deviation['is_deleted']:
-                log.info("Deviation is deleted, skipping.")
-                continue
-            if deviation['is_mature']:
-                log.debug("Deviation is marked as mature.")
-
-            # TODO Need to check type returned when downloading actual image.
-            ext = os.path.splitext(deviation['content']['src'])[-1]
-            # Black magic to pull trailing unique identifier, or just filename
-            # sans extension or path
-            unq = os.path.splitext(os.path.split(deviation['content']['src'])[-1])[0].split('-')[-1]
-            # Generate file name
-            filename = '%s_%s-%s%s' % (deviation['author']['username'], deviation['title'], unq, ext)
-            # Sanitize path of unsafe characters
-            path = ''.join([c for c in filename if c.isalpha() or c.isdigit() or c in '-_.() ']).strip()
-            log.debug("Looking for file %s", path)
-            if path in downloaded:
-                log.info('Deviation exists in output path, skipping.')
-                continue
-            # Generate full path
-            path = os.path.join(conf['output_path'], path)
-            log.debug("Output path will be: %s", path)
-
-            unsuccessful = True
-            if deviation['is_downloadable']:
-                log.debug("Deviation is flagged as downloadable")
-                log.debug("Scraping %s for full image.", url)
-                parser = DAParser(convert_charrefs=True)
-                d_page = requests.get(url)
-                parser.feed(d_page.text)
-                img = parser.get_img()
-                del parser
-
-                if img:
-                    log.debug("Found image url: %s", img)
-
-                    # get real extension here and rebuild file name
-                    ext = _EXT.findall(img)[0]
-                    filename = '%s_%s-%s%s' % (deviation['author']['username'], deviation['title'], unq, ext)
-                    path = ''.join([c for c in filename if c.isalpha() or c.isdigit() or c in '-_.() ']).strip()
-                    log.debug("Looking for full file %s", path)
-                    if path in downloaded:
-                        log.info('Deviation exists in output path, skipping.')
-                        continue
-                    path = os.path.join(conf['output_path'], path)
-
-                    if download_image(path=path, url=img, cookies=d_page.cookies, referrer=url):
-                        unsuccessful = False
-                    unsuccessful = False
-                else:
-                    log.warning("No image found when scraping page %s", url)
-
-            if unsuccessful:
-                # Get provided image
-                # TODO Handle images that you must be logged in to see.
-                log.debug('Falling back to content from API')
-                url = deviation['content']['src']
-                log.debug("Using image url: %s", url)
-                download_image(path=path, url=url)
-
-            time.sleep(1)  # Be nice to Deviant Art :)
-        except:
-            log.error("Unhandled exception when downloading deviations.", exc_info=True)
     log.info('Finished')
 
 
