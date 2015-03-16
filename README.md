@@ -8,7 +8,9 @@ Dependencies
 ------------
 
 -Python 3
+
 -[requests](http://docs.python-requests.org/en/latest/)
+
 -[pyyaml](http://pyyaml.org/)
 
 
