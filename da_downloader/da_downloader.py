@@ -81,10 +81,13 @@ def da_api(conf, method, endpoint, payload):
                     log.debug("Reduced wait time to %s", conf['wait'])
                 return request
             elif request.status_code == 401:  # Invalid token, need to refresh
+                log.debug("API reports invalid or expired token (401). Current token: %s", payload['access_token'])
                 # reauth with the api
                 if not reauthed:  # Only reauth once per loop to prevent infinite reauthing
+                    log.debug("Not yet reauthed in this loop.")
                     remaining_retries += 1
                 conf['access_token'] = auth(conf['client_id'], conf['client_secret'])
+                payload['access_token'] = conf['access_token']
                 reauthed = True
             elif request.status_code == 429:  # API rate limiting
                 log.warning("API ratelimiting encountered.")
